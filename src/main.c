@@ -1,41 +1,87 @@
-#include "types.h"
+#include "util.h"
 
 #include <stdlib.h>
-#include <stdio.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#define WINDOW_TITLE "scop"
+#define WINDOW_WIDTH 1280
+#define WINDOW_HEIGHT 720
+
+static void onExit()
+{
+    glfwTerminate();
+}
+
 int main(void)
 {
-    if (!glfwInit())
-        return EXIT_FAILURE;
+    if (atexit(onExit) != 0)
+        PANIC("%s\n", "Failed to register atexit function");
 
-    u32 windowWidth = 1280;
-    u32 windhowHeight = 720;
-    cstr windowTitle = "scop";
+    if (!glfwInit())
+        PANIC("%s\n", "Failed to initialize GLFW");
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    GLFWwindow* window = glfwCreateWindow(windowWidth, windhowHeight, windowTitle, NULL, NULL);
-
+    GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, NULL, NULL);
     if (window == NULL)
+        PANIC("%s\n", "Failed to create GLFW window");
+
+    u32 glfwExtensionCount = 0;
+    cstr* glfwExtensionNames = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+    if (glfwExtensionNames == NULL)
+        PANIC("%s\n", "System does not provide the Vulkan instance extensions required by GLFW");
+
+    cstr enabledLayerNames[] = {
+#if DEBUG
+        "VK_LAYER_KHRONOS_validation"
+#endif
+    };
+
+    VkInstanceCreateInfo createInfo = {
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .enabledLayerCount = ARR_LEN(enabledLayerNames),
+        .ppEnabledLayerNames = enabledLayerNames,
+        .enabledExtensionCount = glfwExtensionCount,
+        .ppEnabledExtensionNames = glfwExtensionNames
+    };
+
+    VkInstance instance;
+    if (vkCreateInstance(&createInfo, NULL, &instance) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create Vulkan instance");
+
+    u32 physicalDeviceCount = 0;
+    if (vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, NULL) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to determine physical device count");
+
+    VkPhysicalDevice* physicalDevices = mallocOrDie(sizeof(VkPhysicalDevice) * physicalDeviceCount);
+    if (physicalDevices == NULL || vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to enumerate physical devices");
+
+    VkPhysicalDevice selectedPhysicalDevice = VK_NULL_HANDLE;
+    for (usize i = 0; i < physicalDeviceCount && selectedPhysicalDevice == NULL; i++)
     {
-        glfwTerminate();
-        return EXIT_FAILURE;
+        u32 queueFamilyPropertyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyPropertyCount, NULL);
+        VkQueueFamilyProperties* queueFamilyProperties = mallocOrDie(sizeof(VkQueueFamilyProperties) * queueFamilyPropertyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyPropertyCount, queueFamilyProperties);
+
+        for (usize j = 0; j < queueFamilyPropertyCount && selectedPhysicalDevice == NULL; j++)
+            if (queueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+                selectedPhysicalDevice = physicalDevices[i];
+
+        free(queueFamilyProperties);
     }
 
-    u32 extensionCount = 0;
-    vkEnumerateInstanceExtensionProperties(NULL, &extensionCount, NULL);
-    printf("%d extensions supported\n", extensionCount);
+    free(physicalDevices);
 
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
     }
 
-    glfwDestroyWindow(window);
-    glfwTerminate();
+    vkDestroyInstance(instance, NULL);
 
     return EXIT_SUCCESS;
 }
