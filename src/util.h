@@ -30,6 +30,7 @@ typedef const char* cstr;
 
 // MACROS
 
+#include <stdlib.h>
 #include <stddef.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -51,6 +52,9 @@ typedef const char* cstr;
 #define INFORM(fmt, ...) \
     do { if (DEBUG) fprintf(stderr, "%s:%d:%s(): " fmt, __FILE__, __LINE__, __func__, __VA_ARGS__); } while (0)
 
+#define PANIC(fmt, ...) \
+    do { INFORM(fmt, __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+
 // FUNCTIONS
 
 #include <stdlib.h>
@@ -59,10 +63,7 @@ static inline void* mallocOrDie(usize size)
 {
     void* allocation = malloc(size);
     if (allocation == NULL && size > 0)
-    {
-        INFORM("%s\n", "Failed to allocate memory");
-        exit(EXIT_FAILURE);
-    }
+        PANIC("%s\n", "Failed to allocate memory");
     return allocation;
 }
 
