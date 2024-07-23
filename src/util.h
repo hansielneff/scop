@@ -1,8 +1,12 @@
 #ifndef SCOP_UTIL_H
 #define SCOP_UTIL_H
 
-// TYPES
+#include <stdlib.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <assert.h>
 
+// Type definitions
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -26,16 +30,6 @@ typedef uintptr_t uptr;
 typedef float f32;
 typedef double f64;
 
-typedef const char* cstr;
-
-// MACROS
-
-#include <stdlib.h>
-#include <stddef.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <assert.h>
-
 #ifdef NDEBUG
     #define DEBUG 0
 #else
@@ -55,16 +49,17 @@ typedef const char* cstr;
 #define PANIC(fmt, ...) \
     do { INFORM(fmt, __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
 
-// FUNCTIONS
-
-#include <stdlib.h>
-
 static inline void* mallocOrDie(usize size)
 {
-    void* allocation = malloc(size);
-    if (allocation == NULL && size > 0)
+    void* ptr = malloc(size);
+    if (ptr == NULL && size > 0)
         PANIC("%s\n", "Failed to allocate memory");
-    return allocation;
+    return ptr;
 }
+
+// Implemented as a macro to avoid having to pass the address of ptr
+// which in turn forces explicit casting in most cases.
+#define freeAndNull(ptr) \
+    do { free(ptr); ptr = NULL; } while (0)
 
 #endif
