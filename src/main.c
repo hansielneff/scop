@@ -1,6 +1,7 @@
 #include "util.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
@@ -33,6 +34,12 @@ int main(void)
     if (glfwExtensionNames == NULL)
         PANIC("%s\n", "System does not provide the Vulkan instance extensions required by GLFW");
 
+    u32 enabledExtensionCount = glfwExtensionCount + 2;
+    const char** enabledExtensionNames = mallocOrDie(enabledExtensionCount * sizeof(char*));
+    memcpy(enabledExtensionNames, glfwExtensionNames, glfwExtensionCount * sizeof(char*));
+    enabledExtensionNames[glfwExtensionCount] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    enabledExtensionNames[glfwExtensionCount + 1] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
+
     const char* enabledLayerNames[] = {
 #if DEBUG
         "VK_LAYER_KHRONOS_validation"
@@ -41,10 +48,11 @@ int main(void)
 
     VkInstanceCreateInfo createInfo = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
         .enabledLayerCount = ARR_LEN(enabledLayerNames),
         .ppEnabledLayerNames = enabledLayerNames,
-        .enabledExtensionCount = glfwExtensionCount,
-        .ppEnabledExtensionNames = glfwExtensionNames
+        .enabledExtensionCount = enabledExtensionCount,
+        .ppEnabledExtensionNames = enabledExtensionNames
     };
 
     VkInstance instance;
@@ -88,12 +96,15 @@ int main(void)
         .pQueuePriorities = &queuePriority
     };
 
+    const char* deviceExtensionNames[] = {"VK_KHR_portability_subset"};
     VkDeviceCreateInfo deviceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queueCreateInfo,
         .enabledLayerCount = ARR_LEN(enabledLayerNames),
-        .ppEnabledLayerNames = enabledLayerNames
+        .ppEnabledLayerNames = enabledLayerNames,
+        .enabledExtensionCount = ARR_LEN(deviceExtensionNames),
+        .ppEnabledExtensionNames = deviceExtensionNames
     };
 
     VkDevice device;
