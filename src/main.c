@@ -34,11 +34,16 @@ int main(void)
     if (glfwExtensionNames == NULL)
         PANIC("%s\n", "System does not provide the Vulkan instance extensions required by GLFW");
 
-    u32 enabledExtensionCount = glfwExtensionCount + 2;
+    const char* portabilityExtensionNames[] = {
+        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
+    };
+    u32 portabilityExtensionCount = ARR_LEN(portabilityExtensionNames);
+
+    u32 enabledExtensionCount = glfwExtensionCount + portabilityExtensionCount;
     const char** enabledExtensionNames = mallocOrDie(enabledExtensionCount * sizeof(char*));
     memcpy(enabledExtensionNames, glfwExtensionNames, glfwExtensionCount * sizeof(char*));
-    enabledExtensionNames[glfwExtensionCount] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
-    enabledExtensionNames[glfwExtensionCount + 1] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
+    memcpy(enabledExtensionNames + glfwExtensionCount, portabilityExtensionNames, portabilityExtensionCount * sizeof(char*));
 
     const char* enabledLayerNames[] = {
 #if DEBUG
@@ -112,6 +117,9 @@ int main(void)
 
     selectedPhysicalDevice = NULL;
     freeAndNull(physicalDevices);
+
+    VkQueue graphicsQueue;
+    vkGetDeviceQueue(device, graphicsQueueFamilyIndex, 0, &graphicsQueue);
 
     while(!glfwWindowShouldClose(window))
     {
