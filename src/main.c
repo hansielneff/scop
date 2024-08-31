@@ -64,6 +64,10 @@ int main(void)
     if (vkCreateInstance(&createInfo, NULL, &instance) != VK_SUCCESS)
         PANIC("%s\n", "Failed to create Vulkan instance");
 
+    VkSurfaceKHR surface;
+    if (glfwCreateWindowSurface(instance, window, NULL, &surface) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create window surface");
+
     u32 physicalDeviceCount = 0;
     if (vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, NULL) != VK_SUCCESS)
         PANIC("%s\n", "Failed to determine physical device count");
@@ -73,20 +77,23 @@ int main(void)
         PANIC("%s\n", "Failed to enumerate physical devices");
 
     VkPhysicalDevice selectedPhysicalDevice = VK_NULL_HANDLE;
-    u32 graphicsQueueFamilyIndex = 0;
-    for (usize i = 0; i < physicalDeviceCount && selectedPhysicalDevice == NULL; i++)
+    u32 queueFamilyIndex = 0;
+    for (usize i = 0; i < physicalDeviceCount && selectedPhysicalDevice == VK_NULL_HANDLE; i++)
     {
         u32 queueFamilyPropertyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyPropertyCount, NULL);
         VkQueueFamilyProperties* queueFamilyProperties = mallocOrDie(sizeof(VkQueueFamilyProperties) * queueFamilyPropertyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[i], &queueFamilyPropertyCount, queueFamilyProperties);
 
-        for (usize j = 0; j < queueFamilyPropertyCount && selectedPhysicalDevice == NULL; j++)
+        for (usize j = 0; j < queueFamilyPropertyCount; j++)
         {
-            if (queueFamilyProperties[j].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            VkBool32 presentSupport = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevices[i], j, surface, &presentSupport);
+            if (presentSupport && (queueFamilyProperties[j].queueFlags & VK_QUEUE_GRAPHICS_BIT))
             {
-                graphicsQueueFamilyIndex = (u32)j;
                 selectedPhysicalDevice = physicalDevices[i];
+                queueFamilyIndex = j;
+                break;
             }
         }
 
@@ -96,7 +103,7 @@ int main(void)
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = graphicsQueueFamilyIndex,
+        .queueFamilyIndex = queueFamilyIndex,
         .queueCount = 1,
         .pQueuePriorities = &queuePriority
     };
@@ -118,8 +125,8 @@ int main(void)
     selectedPhysicalDevice = NULL;
     freeAndNull(physicalDevices);
 
-    VkQueue graphicsQueue;
-    vkGetDeviceQueue(device, graphicsQueueFamilyIndex, 0, &graphicsQueue);
+    VkQueue queue;
+    vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
 
     while(!glfwWindowShouldClose(window))
     {
@@ -127,6 +134,7 @@ int main(void)
     }
 
     vkDestroyDevice(device, NULL);
+    vkDestroySurfaceKHR(instance, surface, NULL);
     vkDestroyInstance(instance, NULL);
 
     return EXIT_SUCCESS;
