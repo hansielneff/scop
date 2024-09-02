@@ -29,6 +29,40 @@ static const char* deviceExtensionNames[] = {
 };
 static u32 deviceExtensionCount = ARR_LEN(deviceExtensionNames);
 
+static u32* readShaderBytecode(const char* filePath, const char* mode, usize* outBytesRead)
+{
+    FILE* file = fopen(filePath, mode);
+    if (file == NULL)
+        PANIC("%s%s\n", "Failed to open file: ", filePath);
+
+    if (fseek(file, 0, SEEK_END) == -1)
+        PANIC("%s%s\n", "Failed to seek end of file: ", filePath);
+
+    long fileSize = ftell(file);
+    if (fileSize == -1)
+        PANIC("%s%s\n", "Failed to determine size of file: ", filePath);
+
+    rewind(file);
+
+    ASSERT(sizeof(void*) % sizeof(u32) == 0);
+    void* bytecode;
+    if (posix_memalign(&bytecode, sizeof(void*), fileSize) != 0)
+        PANIC("%s%s\n", "Failed to allocate memory for file: ", filePath);
+
+    size_t bytesRead = fread(bytecode, 1, fileSize, file);
+
+    if (fclose(file) == EOF)
+        INFORM("%s%s\n", "Failed to close file: ", filePath);
+    
+    if (bytesRead != fileSize || ferror(file))
+        PANIC("%s%s\n", "Failed to read file: ", filePath);
+
+    if (outBytesRead != NULL)
+        *outBytesRead = (usize)bytesRead;
+
+    return bytecode;
+}
+
 static void onExit(void)
 {
     glfwTerminate();
@@ -283,10 +317,55 @@ int main(void)
             PANIC("%s\n", "Failed to create image view");
     }
 
+    VkShaderModuleCreateInfo shaderModuleCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
+    };
+
+    usize vertShaderCodeSize;
+    u32* vertShaderCode = readShaderBytecode("shaders/vert.spv", "rb", &vertShaderCodeSize);
+    shaderModuleCreateInfo.codeSize = vertShaderCodeSize;
+    shaderModuleCreateInfo.pCode = vertShaderCode;
+
+    VkShaderModule vertShaderModule;
+    if (vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &vertShaderModule) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create vertex shader module");
+    freeAndNull(vertShaderCode);
+
+    usize fragShaderCodeSize;
+    u32* fragShaderCode = readShaderBytecode("shaders/frag.spv", "rb", &fragShaderCodeSize);
+    shaderModuleCreateInfo.codeSize = fragShaderCodeSize;
+    shaderModuleCreateInfo.pCode = fragShaderCode;
+
+    VkShaderModule fragShaderModule;
+    if (vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &fragShaderModule) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create fragment shader module");
+    freeAndNull(fragShaderCode);
+
+    VkPipelineShaderStageCreateInfo shaderStageCreateInfos[] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vertShaderModule,
+            .pName = "main"
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = fragShaderModule,
+            .pName = "main"
+        },
+    };
+
+    vkDestroyShaderModule(device, vertShaderModule, NULL);
+    vkDestroyShaderModule(device, fragShaderModule, NULL);
+
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
     }
+
+    freeAndNull(vertShaderCode);
+    freeAndNull(fragShaderCode);
 
     for (u32 i = 0; i < swapchainImageCount; i++)
         vkDestroyImageView(device, swapchainImageViews[i], NULL);
