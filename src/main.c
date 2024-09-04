@@ -339,12 +339,23 @@ int main(void)
         .pColorAttachments = &colorAttachmentReference,
     };
 
+    VkSubpassDependency subpassDependency = {
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = VK_ACCESS_NONE,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+    };
+
     VkRenderPassCreateInfo renderPassCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .attachmentCount = 1,
         .pAttachments = &colorAttachmentDescription,
         .subpassCount = 1,
-        .pSubpasses = &subpassDescription
+        .pSubpasses = &subpassDescription,
+        .dependencyCount = 1,
+        .pDependencies = &subpassDependency
     };
 
     VkRenderPass renderPass;
@@ -409,20 +420,6 @@ int main(void)
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         .primitiveRestartEnable = VK_FALSE
-    };
-
-    VkViewport viewport = {
-        .x = 0.f,
-        .y = 0.f,
-        .width = (f32)surfaceExtent.width,
-        .height = (f32)surfaceExtent.height,
-        .minDepth = 0.f,
-        .maxDepth = 1.f
-    };
-
-    VkRect2D scissor = {
-        .offset = {0, 0},
-        .extent = surfaceExtent
     };
 
     VkPipelineViewportStateCreateInfo viewportStateCreateInfo = {
@@ -507,11 +504,138 @@ int main(void)
         }
     }
 
+    VkCommandPoolCreateInfo commandPoolCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = queueFamilyIndex
+    };
+
+    VkCommandPool commandPool;
+    if (vkCreateCommandPool(device, &commandPoolCreateInfo, NULL, &commandPool) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create command pool");
+
+    VkCommandBufferAllocateInfo commandBufferAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = commandPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+
+    VkCommandBuffer commandBuffer;
+    if (vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to allocate command buffers");
+
+    VkSemaphoreCreateInfo semaphoreCreateInfo = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VkSemaphore imageAvailableSemaphore;
+    VkSemaphore renderFinishedSemaphore;
+    if (vkCreateSemaphore(device, &semaphoreCreateInfo, NULL, &imageAvailableSemaphore) != VK_SUCCESS ||
+        vkCreateSemaphore(device, &semaphoreCreateInfo, NULL, &renderFinishedSemaphore) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create semaphores");
+
+    VkFenceCreateInfo fenceCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT
+    };
+
+    VkFence inFlightFence;
+    if (vkCreateFence(device, &fenceCreateInfo, NULL, &inFlightFence) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create fence");
+
+    VkViewport viewport = {
+        .x = 0.f,
+        .y = 0.f,
+        .width = (f32)surfaceExtent.width,
+        .height = (f32)surfaceExtent.height,
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+
+    VkRect2D scissor = {
+        .offset = {0, 0},
+        .extent = surfaceExtent
+    };
+
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+
+        if (vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to wait for fences");
+
+        if (vkResetFences(device, 1, &inFlightFence) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to reset fences");
+
+        u32 imageIndex;
+        if (vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to acquire next image from swapchain");
+
+        if (vkResetCommandBuffer(commandBuffer, 0) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to reset command buffer");
+        
+        VkCommandBufferBeginInfo commandBufferBeginInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        if (vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to begin command buffer");
+
+        VkClearValue clearValue = {.color = {0.f, 0.f, 0.f, 1.f}};
+        VkRenderPassBeginInfo renderPassBeginInfo = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = renderPass,
+            .framebuffer = swapchainFramebuffers[imageIndex],
+            .renderArea = {
+                .offset = {0, 0},
+                .extent = surfaceExtent
+            },
+            .clearValueCount = 1,
+            .pClearValues = &clearValue
+        };
+
+        vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        vkCmdEndRenderPass(commandBuffer);
+
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to end command buffer");
+        
+        VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+        VkSemaphore waitSemaphores[] = {imageAvailableSemaphore};
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        VkSubmitInfo submitInfo = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = ARR_LEN(waitSemaphores),
+            .pWaitSemaphores = waitSemaphores,
+            .pWaitDstStageMask = waitStages,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &commandBuffer,
+            .signalSemaphoreCount = ARR_LEN(signalSemaphores),
+            .pSignalSemaphores = signalSemaphores
+        };
+
+        if (vkQueueSubmit(queue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to submit command buffers to queue");
+
+        VkPresentInfoKHR presentInfo = {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = ARR_LEN(signalSemaphores),
+            .pWaitSemaphores = signalSemaphores,
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &imageIndex
+        };
+
+        if (vkQueuePresentKHR(queue, &presentInfo) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to queue presentation");
     }
 
+    vkDeviceWaitIdle(device);
+
+    vkDestroySemaphore(device, imageAvailableSemaphore, NULL);
+    vkDestroySemaphore(device, renderFinishedSemaphore, NULL);
+    vkDestroyFence(device, inFlightFence, NULL);
+
+    vkDestroyCommandPool(device, commandPool, NULL);
     vkDestroyPipeline(device, graphicsPipeline, NULL);
     vkDestroyPipelineLayout(device, pipelineLayout, NULL);
     vkDestroyRenderPass(device, renderPass, NULL);
