@@ -489,20 +489,43 @@ int main(void)
     vkDestroyShaderModule(device, vertShaderModule, NULL);
     vkDestroyShaderModule(device, fragShaderModule, NULL);
 
+    VkFramebuffer* swapchainFramebuffers = mallocOrDie(sizeof(VkFramebuffer) * swapchainImageCount);
+    for (u32 i = 0; i < swapchainImageCount; i++)
+    {
+        VkFramebufferCreateInfo framebufferCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = renderPass,
+            .attachmentCount = 1,
+            .pAttachments = &swapchainImageViews[i],
+            .width = surfaceExtent.width,
+            .height = surfaceExtent.height,
+            .layers = 1
+        };
+
+        if (vkCreateFramebuffer(device, &framebufferCreateInfo, NULL, &swapchainFramebuffers[i]) != VK_SUCCESS) {
+            PANIC("%s\n", "Failed to create framebuffer");
+        }
+    }
+
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
     }
 
-    for (u32 i = 0; i < swapchainImageCount; i++)
-        vkDestroyImageView(device, swapchainImageViews[i], NULL);
-
-    freeAndNull(swapchainImageViews);
-    freeAndNull(swapchainImages);
-
     vkDestroyPipeline(device, graphicsPipeline, NULL);
     vkDestroyPipelineLayout(device, pipelineLayout, NULL);
     vkDestroyRenderPass(device, renderPass, NULL);
+
+    for (u32 i = 0; i < swapchainImageCount; i++)
+    {
+        vkDestroyFramebuffer(device, swapchainFramebuffers[i], NULL);
+        vkDestroyImageView(device, swapchainImageViews[i], NULL);
+    }
+
+    freeAndNull(swapchainFramebuffers);
+    freeAndNull(swapchainImageViews);
+    freeAndNull(swapchainImages);
+
     vkDestroySwapchainKHR(device, swapchain, NULL);
     vkDestroyDevice(device, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
