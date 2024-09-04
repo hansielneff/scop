@@ -317,6 +317,40 @@ int main(void)
             PANIC("%s\n", "Failed to create image view");
     }
 
+    VkAttachmentDescription colorAttachmentDescription = {
+        .format = surfaceFormat.format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    };
+
+    VkAttachmentReference colorAttachmentReference = {
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+
+    VkSubpassDescription subpassDescription = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachmentReference,
+    };
+
+    VkRenderPassCreateInfo renderPassCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &colorAttachmentDescription,
+        .subpassCount = 1,
+        .pSubpasses = &subpassDescription
+    };
+
+    VkRenderPass renderPass;
+    if (vkCreateRenderPass(device, &renderPassCreateInfo, NULL, &renderPass) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create render pass");
+
     VkShaderModuleCreateInfo shaderModuleCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
     };
@@ -424,7 +458,6 @@ int main(void)
         .pAttachments = &colorBlendAttachmentState
     };
 
-
     VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
     };
@@ -432,6 +465,26 @@ int main(void)
     VkPipelineLayout pipelineLayout;
     if (vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, NULL, &pipelineLayout) != VK_SUCCESS)
         PANIC("%s\n", "Failed to create pipeline layout");
+
+    VkGraphicsPipelineCreateInfo graphicsPipelineCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = shaderStageCreateInfos,
+        .pVertexInputState = &vertexInputStateCreateInfo,
+        .pInputAssemblyState = &inputAssemblyStateCreateInfo,
+        .pViewportState = &viewportStateCreateInfo,
+        .pRasterizationState = &rasterizationStateCreateInfo,
+        .pMultisampleState = &multisampleStateCreateInfo,
+        .pColorBlendState = &colorBlendStateCreateInfo,
+        .pDynamicState = &dynamicStateCreateInfo,
+        .layout = pipelineLayout,
+        .renderPass = renderPass,
+        .subpass = 0
+    };
+
+    VkPipeline graphicsPipeline;
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &graphicsPipelineCreateInfo, NULL, &graphicsPipeline) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create graphics pipeline");
 
     vkDestroyShaderModule(device, vertShaderModule, NULL);
     vkDestroyShaderModule(device, fragShaderModule, NULL);
@@ -441,16 +494,15 @@ int main(void)
         glfwPollEvents();
     }
 
-    freeAndNull(vertShaderCode);
-    freeAndNull(fragShaderCode);
-
     for (u32 i = 0; i < swapchainImageCount; i++)
         vkDestroyImageView(device, swapchainImageViews[i], NULL);
 
     freeAndNull(swapchainImageViews);
     freeAndNull(swapchainImages);
 
+    vkDestroyPipeline(device, graphicsPipeline, NULL);
     vkDestroyPipelineLayout(device, pipelineLayout, NULL);
+    vkDestroyRenderPass(device, renderPass, NULL);
     vkDestroySwapchainKHR(device, swapchain, NULL);
     vkDestroyDevice(device, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
