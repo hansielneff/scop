@@ -10,6 +10,8 @@
 #define WINDOW_WIDTH 1280
 #define WINDOW_HEIGHT 720
 
+#define MAX_FRAMES_IN_FLIGHT 2
+
 static const char* validationLayerNames[] = {
 #if DEBUG
     "VK_LAYER_KHRONOS_validation"
@@ -518,28 +520,33 @@ int main(void)
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool = commandPool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1
+        .commandBufferCount = MAX_FRAMES_IN_FLIGHT
     };
 
-    VkCommandBuffer commandBuffer;
-    if (vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &commandBuffer) != VK_SUCCESS)
+    VkCommandBuffer commandBuffers[MAX_FRAMES_IN_FLIGHT];
+    if (vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, commandBuffers) != VK_SUCCESS)
         PANIC("%s\n", "Failed to allocate command buffers");
 
     VkSemaphoreCreateInfo semaphoreCreateInfo = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    VkSemaphore imageAvailableSemaphore;
-    VkSemaphore renderFinishedSemaphore;
-    if (vkCreateSemaphore(device, &semaphoreCreateInfo, NULL, &imageAvailableSemaphore) != VK_SUCCESS ||
-        vkCreateSemaphore(device, &semaphoreCreateInfo, NULL, &renderFinishedSemaphore) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to create semaphores");
 
     VkFenceCreateInfo fenceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .flags = VK_FENCE_CREATE_SIGNALED_BIT
     };
 
-    VkFence inFlightFence;
-    if (vkCreateFence(device, &fenceCreateInfo, NULL, &inFlightFence) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to create fence");
+    VkSemaphore imageAvailableSemaphores[MAX_FRAMES_IN_FLIGHT];
+    VkSemaphore renderFinishedSemaphores[MAX_FRAMES_IN_FLIGHT];
+    VkFence inFlightFences[MAX_FRAMES_IN_FLIGHT];
+
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        if (vkCreateSemaphore(device, &semaphoreCreateInfo, NULL, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+            vkCreateSemaphore(device, &semaphoreCreateInfo, NULL, &renderFinishedSemaphores[i]) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to create semaphore");
+
+        if (vkCreateFence(device, &fenceCreateInfo, NULL, &inFlightFences[i]) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to create fence");
+    }
 
     VkViewport viewport = {
         .x = 0.f,
@@ -555,25 +562,26 @@ int main(void)
         .extent = surfaceExtent
     };
 
+    u32 currentFrame = 0;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
 
-        if (vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+        if (vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX) != VK_SUCCESS)
             PANIC("%s\n", "Failed to wait for fences");
 
-        if (vkResetFences(device, 1, &inFlightFence) != VK_SUCCESS)
+        if (vkResetFences(device, 1, &inFlightFences[currentFrame]) != VK_SUCCESS)
             PANIC("%s\n", "Failed to reset fences");
 
         u32 imageIndex;
-        if (vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex) != VK_SUCCESS)
+        if (vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex) != VK_SUCCESS)
             PANIC("%s\n", "Failed to acquire next image from swapchain");
 
-        if (vkResetCommandBuffer(commandBuffer, 0) != VK_SUCCESS)
+        if (vkResetCommandBuffer(commandBuffers[currentFrame], 0) != VK_SUCCESS)
             PANIC("%s\n", "Failed to reset command buffer");
         
         VkCommandBufferBeginInfo commandBufferBeginInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        if (vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo) != VK_SUCCESS)
+        if (vkBeginCommandBuffer(commandBuffers[currentFrame], &commandBufferBeginInfo) != VK_SUCCESS)
             PANIC("%s\n", "Failed to begin command buffer");
 
         VkClearValue clearValue = {.color = {0.f, 0.f, 0.f, 1.f}};
@@ -589,18 +597,18 @@ int main(void)
             .pClearValues = &clearValue
         };
 
-        vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        vkCmdEndRenderPass(commandBuffer);
+        vkCmdBeginRenderPass(commandBuffers[currentFrame], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(commandBuffers[currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        vkCmdSetViewport(commandBuffers[currentFrame], 0, 1, &viewport);
+        vkCmdSetScissor(commandBuffers[currentFrame], 0, 1, &scissor);
+        vkCmdDraw(commandBuffers[currentFrame], 3, 1, 0, 0);
+        vkCmdEndRenderPass(commandBuffers[currentFrame]);
 
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+        if (vkEndCommandBuffer(commandBuffers[currentFrame]) != VK_SUCCESS)
             PANIC("%s\n", "Failed to end command buffer");
         
-        VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
-        VkSemaphore waitSemaphores[] = {imageAvailableSemaphore};
+        VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
+        VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
         VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
         VkSubmitInfo submitInfo = {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -608,12 +616,12 @@ int main(void)
             .pWaitSemaphores = waitSemaphores,
             .pWaitDstStageMask = waitStages,
             .commandBufferCount = 1,
-            .pCommandBuffers = &commandBuffer,
+            .pCommandBuffers = &commandBuffers[currentFrame],
             .signalSemaphoreCount = ARR_LEN(signalSemaphores),
             .pSignalSemaphores = signalSemaphores
         };
 
-        if (vkQueueSubmit(queue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+        if (vkQueueSubmit(queue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
             PANIC("%s\n", "Failed to submit command buffers to queue");
 
         VkPresentInfoKHR presentInfo = {
@@ -627,13 +635,18 @@ int main(void)
 
         if (vkQueuePresentKHR(queue, &presentInfo) != VK_SUCCESS)
             PANIC("%s\n", "Failed to queue presentation");
+        
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     vkDeviceWaitIdle(device);
 
-    vkDestroySemaphore(device, imageAvailableSemaphore, NULL);
-    vkDestroySemaphore(device, renderFinishedSemaphore, NULL);
-    vkDestroyFence(device, inFlightFence, NULL);
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        vkDestroySemaphore(device, imageAvailableSemaphores[i], NULL);
+        vkDestroySemaphore(device, renderFinishedSemaphores[i], NULL);
+        vkDestroyFence(device, inFlightFences[i], NULL);
+    }
 
     vkDestroyCommandPool(device, commandPool, NULL);
     vkDestroyPipeline(device, graphicsPipeline, NULL);
