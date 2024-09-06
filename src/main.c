@@ -65,25 +65,8 @@ static u32* readShaderBytecode(const char* filePath, const char* mode, usize* ou
     return bytecode;
 }
 
-static void onExit(void)
+VkInstance createVulkanInstance()
 {
-    glfwTerminate();
-}
-
-int main(void)
-{
-    if (atexit(onExit) != 0)
-        PANIC("%s\n", "Failed to register atexit function");
-
-    if (!glfwInit())
-        PANIC("%s\n", "Failed to initialize GLFW");
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, NULL, NULL);
-    if (window == NULL)
-        PANIC("%s\n", "Failed to create GLFW window");
-
     u32 glfwExtensionCount = 0;
     const char** glfwExtensionNames = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     if (glfwExtensionNames == NULL)
@@ -94,7 +77,7 @@ int main(void)
     memcpy(enabledExtensionNames, instanceExtensionNames, instanceExtensionCount * sizeof(char*));
     memcpy(enabledExtensionNames + instanceExtensionCount, glfwExtensionNames, glfwExtensionCount * sizeof(char*));
 
-    VkInstanceCreateInfo createInfo = {
+    VkInstanceCreateInfo instanceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
         .enabledLayerCount = validationLayerCount,
@@ -104,15 +87,16 @@ int main(void)
     };
 
     VkInstance instance;
-    if (vkCreateInstance(&createInfo, NULL, &instance) != VK_SUCCESS)
+    if (vkCreateInstance(&instanceCreateInfo, NULL, &instance) != VK_SUCCESS)
         PANIC("%s\n", "Failed to create Vulkan instance");
 
     freeAndNull(enabledExtensionNames);
 
-    VkSurfaceKHR surface;
-    if (glfwCreateWindowSurface(instance, window, NULL, &surface) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to create window surface");
+    return instance;
+}
 
+VkPhysicalDevice pickPhysicalDeviceAndQueueFamily(VkInstance instance, VkSurfaceKHR surface, u32* outQueueFamilyIndex)
+{
     u32 physicalDeviceCount = 0;
     if (vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, NULL) != VK_SUCCESS)
         PANIC("%s\n", "Failed to determine physical device count");
@@ -170,157 +154,100 @@ int main(void)
         freeAndNull(queueFamilyProperties);
     }
 
+    freeAndNull(physicalDevices);
+
     if (physicalDevice == VK_NULL_HANDLE)
         PANIC("%s\n", "Failed to find a suitable physical device");
-
-    VkSurfaceCapabilitiesKHR surfaceCapabilities;
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCapabilities) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to determine physical device surface capabilities");
     
-    VkExtent2D surfaceExtent = surfaceCapabilities.currentExtent;
-    if (surfaceExtent.width == UINT32_MAX)
+    if (outQueueFamilyIndex != NULL)
+        *outQueueFamilyIndex = queueFamilyIndex;
+
+    return physicalDevice;
+}
+
+VkSurfaceFormatKHR pickSurfaceFormat(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface)
+{
+    u32 formatCount;
+    if (vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, NULL) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to determine physical device surface format count");
+
+    if (formatCount == 0)
+        PANIC("%s\n", "Physical device does not support any surface formats");
+    
+    VkSurfaceFormatKHR* formats = mallocOrDie(sizeof(VkSurfaceFormatKHR) * formatCount);
+    if (vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to enumerate physical device surface formats");
+
+    VkSurfaceFormatKHR format = formats[0];
+    for (u32 i = 0; i < formatCount; i++)
+    {
+        if (formats[i].format == VK_FORMAT_B8G8R8A8_SRGB && formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        {
+            format = formats[i];
+            break;
+        }
+    }
+
+    freeAndNull(formats);
+
+    return format;
+}
+
+VkPresentModeKHR pickSurfacePresentMode(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface)
+{
+    u32 presentModeCount;
+    if (vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, NULL) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to determine physical device surface present mode count");
+
+    if (presentModeCount == 0)
+        PANIC("%s\n", "Physical device does not support any surface present modes");
+
+    VkPresentModeKHR* presentModes = mallocOrDie(sizeof(VkPresentModeKHR) * presentModeCount);
+    if (vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, NULL) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to enumerate physical device surface present modes");
+
+    // NOTE(Hans): The standard FIFO present mode is guaranteed to exist
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    for (u32 i = 0; i < presentModeCount; i++)
+    {
+        if (presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+        {
+            presentMode = presentModes[i];
+            break;
+        }
+    }
+
+    freeAndNull(presentModes);
+
+    return presentMode;
+}
+
+VkExtent2D querySurfaceExtent(GLFWwindow* window, VkSurfaceCapabilitiesKHR surfaceCapabilities)
+{
+    VkExtent2D extent = surfaceCapabilities.currentExtent;
+    if (extent.width == UINT32_MAX)
     {
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
 
         u32 minWidth = surfaceCapabilities.minImageExtent.width;
         u32 maxWidth = surfaceCapabilities.maxImageExtent.width;
-        surfaceExtent.width = (u32)(width > minWidth) ? width : minWidth;
-        surfaceExtent.width = (u32)(width < maxWidth) ? width : maxWidth;
+        extent.width = (u32)(width > minWidth) ? width : minWidth;
+        extent.width = (u32)(width < maxWidth) ? width : maxWidth;
 
         u32 minHeight = surfaceCapabilities.minImageExtent.height;
         u32 maxHeight = surfaceCapabilities.maxImageExtent.height;
-        surfaceExtent.height = (u32)(height > minHeight) ? height : minHeight;
-        surfaceExtent.height = (u32)(height < maxHeight) ? height : maxHeight;
+        extent.height = (u32)(height > minHeight) ? height : minHeight;
+        extent.height = (u32)(height < maxHeight) ? height : maxHeight;
     }
 
-    u32 surfaceFormatCount;
-    if (vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &surfaceFormatCount, NULL) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to determine physical device surface format count");
+    return extent;
+}
 
-    if (surfaceFormatCount == 0)
-        PANIC("%s\n", "Physical device does not support any surface formats");
-    
-    VkSurfaceFormatKHR* surfaceFormats = mallocOrDie(sizeof(VkSurfaceFormatKHR) * surfaceFormatCount);
-    if (vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &surfaceFormatCount, surfaceFormats) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to enumerate physical device surface formats");
-
-    VkSurfaceFormatKHR surfaceFormat = surfaceFormats[0];
-    for (u32 i = 0; i < surfaceFormatCount; i++)
-    {
-        if (surfaceFormats[i].format == VK_FORMAT_B8G8R8A8_SRGB && surfaceFormats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-        {
-            surfaceFormat = surfaceFormats[i];
-            break;
-        }
-    }
-
-    freeAndNull(surfaceFormats);
-
-    u32 surfacePresentModeCount;
-    if (vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &surfacePresentModeCount, NULL) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to determine physical device surface present mode count");
-
-    if (surfacePresentModeCount == 0)
-        PANIC("%s\n", "Physical device does not support any surface present modes");
-
-    VkPresentModeKHR* surfacePresentModes = mallocOrDie(sizeof(VkPresentModeKHR) * surfacePresentModeCount);
-    if (vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &surfacePresentModeCount, NULL) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to enumerate physical device surface present modes");
-
-    // NOTE(Hans): The standard FIFO present mode is guaranteed to exist
-    VkPresentModeKHR surfacePresentMode = VK_PRESENT_MODE_FIFO_KHR;
-    for (u32 i = 0; i < surfacePresentModeCount; i++)
-    {
-        if (surfacePresentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
-        {
-            surfacePresentMode = surfacePresentModes[i];
-            break;
-        }
-    }
-
-    freeAndNull(surfacePresentModes);
-
-    float queuePriority = 1.0f;
-    VkDeviceQueueCreateInfo queueCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = queueFamilyIndex,
-        .queueCount = 1,
-        .pQueuePriorities = &queuePriority
-    };
-
-    VkDeviceCreateInfo deviceCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queueCreateInfo,
-        .enabledLayerCount = validationLayerCount,
-        .ppEnabledLayerNames = validationLayerNames,
-        .enabledExtensionCount = deviceExtensionCount,
-        .ppEnabledExtensionNames = deviceExtensionNames
-    };
-
-    VkDevice device;
-    vkCreateDevice(physicalDevice, &deviceCreateInfo, NULL, &device);
-
-    physicalDevice = NULL;
-    freeAndNull(physicalDevices);
-
-    VkQueue queue;
-    vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
-
-    u32 swapchainMinImageCount = surfaceCapabilities.minImageCount + 1;
-    if (surfaceCapabilities.maxImageCount > 0 && swapchainMinImageCount > surfaceCapabilities.maxImageCount)
-        swapchainMinImageCount = surfaceCapabilities.maxImageCount;
-
-    VkSwapchainCreateInfoKHR swapchainCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        .surface = surface,
-        .minImageCount = swapchainMinImageCount,
-        .imageFormat = surfaceFormat.format,
-        .imageColorSpace = surfaceFormat.colorSpace,
-        .imageExtent = surfaceExtent,
-        .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .preTransform = surfaceCapabilities.currentTransform,
-        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .presentMode = surfacePresentMode,
-        .clipped = VK_TRUE
-    };
-
-    VkSwapchainKHR swapchain;
-    if (vkCreateSwapchainKHR(device, &swapchainCreateInfo, NULL, &swapchain) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to create swapchain");
-
-    u32 swapchainImageCount;
-    if (vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, NULL) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to determine swapchain image count");
-
-    VkImage* swapchainImages = mallocOrDie(sizeof(VkImage) * swapchainImageCount);
-    if (vkGetSwapchainImagesKHR(device, swapchain, &swapchainImageCount, swapchainImages) != VK_SUCCESS)
-        PANIC("%s\n", "Failed to get handles to swapchain images");
-
-    VkImageView* swapchainImageViews = mallocOrDie(sizeof(VkImageView) * swapchainImageCount);
-    for (u32 i = 0; i < swapchainImageCount; i++)
-    {
-        VkImageViewCreateInfo imageViewCreateInfo = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = swapchainImages[i],
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = surfaceFormat.format,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .levelCount = 1,
-                .layerCount = 1
-            }
-        };
-        
-        if (vkCreateImageView(device, &imageViewCreateInfo, NULL, &swapchainImageViews[i]) != VK_SUCCESS)
-            PANIC("%s\n", "Failed to create image view");
-    }
-
+VkRenderPass createRenderPass(VkDevice device, VkFormat pixelFormat)
+{
     VkAttachmentDescription colorAttachmentDescription = {
-        .format = surfaceFormat.format,
+        .format = pixelFormat,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -363,7 +290,12 @@ int main(void)
     VkRenderPass renderPass;
     if (vkCreateRenderPass(device, &renderPassCreateInfo, NULL, &renderPass) != VK_SUCCESS)
         PANIC("%s\n", "Failed to create render pass");
+    
+    return renderPass;
+}
 
+VkPipeline createGraphicsPipeline(VkDevice device, VkRenderPass renderPass, VkPipelineLayout* outPipelineLayout)
+{
     VkShaderModuleCreateInfo shaderModuleCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
     };
@@ -488,23 +420,209 @@ int main(void)
     vkDestroyShaderModule(device, vertShaderModule, NULL);
     vkDestroyShaderModule(device, fragShaderModule, NULL);
 
-    VkFramebuffer* swapchainFramebuffers = mallocOrDie(sizeof(VkFramebuffer) * swapchainImageCount);
-    for (u32 i = 0; i < swapchainImageCount; i++)
+    ASSERT(outPipelineLayout != NULL);
+    *outPipelineLayout = pipelineLayout;
+
+    return graphicsPipeline;
+}
+
+static VkSwapchainKHR createSwapchain(VkDevice device, VkSurfaceKHR surface, VkSurfaceCapabilitiesKHR surfaceCapabilities, VkSurfaceFormatKHR surfaceFormat, VkPresentModeKHR surfacePresentMode, VkExtent2D surfaceExtent)
+{
+    u32 swapchainMinImageCount = surfaceCapabilities.minImageCount + 1;
+    if (surfaceCapabilities.maxImageCount > 0 && swapchainMinImageCount > surfaceCapabilities.maxImageCount)
+        swapchainMinImageCount = surfaceCapabilities.maxImageCount;
+    
+    VkSwapchainCreateInfoKHR swapchainCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .surface = surface,
+        .minImageCount = swapchainMinImageCount,
+        .imageFormat = surfaceFormat.format,
+        .imageColorSpace = surfaceFormat.colorSpace,
+        .imageExtent = surfaceExtent,
+        .imageArrayLayers = 1,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .preTransform = surfaceCapabilities.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = surfacePresentMode,
+        .clipped = VK_TRUE
+    };
+
+    VkSwapchainKHR swapchain;
+    if (vkCreateSwapchainKHR(device, &swapchainCreateInfo, NULL, &swapchain) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create swapchain");
+    
+    return swapchain;
+}
+
+static void destroySwapchain(VkDevice device, VkSwapchainKHR* swapchain, u32 imageCount, VkImage* images, VkImageView* imageViews, VkFramebuffer* framebuffers)
+{
+    vkDeviceWaitIdle(device);
+
+    for (u32 i = 0; i < imageCount; i++)
+    {
+        vkDestroyFramebuffer(device, framebuffers[i], NULL);
+        vkDestroyImageView(device, imageViews[i], NULL);
+    }
+
+    freeAndNull(framebuffers);
+    freeAndNull(imageViews);
+    freeAndNull(images);
+
+    vkDestroySwapchainKHR(device, *swapchain, NULL);
+    *swapchain = VK_NULL_HANDLE;
+}
+
+static VkImage* getSwapchainImages(VkDevice device, VkSwapchainKHR swapchain, u32* outImageCount)
+{
+    u32 imageCount;
+    if (vkGetSwapchainImagesKHR(device, swapchain, &imageCount, NULL) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to determine swapchain image count");
+
+    VkImage* images = mallocOrDie(sizeof(VkImage) * imageCount);
+    if (vkGetSwapchainImagesKHR(device, swapchain, &imageCount, images) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to get handles to swapchain images");
+
+    if (outImageCount != NULL)
+        *outImageCount = imageCount;
+
+    return images;
+}
+
+static VkImageView* createSwapchainImageViews(VkDevice device, VkImage* images, u32 imageCount, VkFormat pixelFormat)
+{
+    VkImageView* imageViews = mallocOrDie(sizeof(VkImageView) * imageCount);
+    for (u32 i = 0; i < imageCount; i++)
+    {
+        VkImageViewCreateInfo imageViewCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = images[i],
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = pixelFormat,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = 1,
+                .layerCount = 1
+            }
+        };
+        
+        if (vkCreateImageView(device, &imageViewCreateInfo, NULL, &imageViews[i]) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to create image view");
+    }
+
+    return imageViews;
+}
+
+static VkFramebuffer* createSwapchainFramebuffers(VkDevice device, VkImageView* imageViews, u32 imageCount, VkExtent2D extent, VkRenderPass renderPass)
+{
+    VkFramebuffer* framebuffers = mallocOrDie(sizeof(VkFramebuffer) * imageCount);
+    for (u32 i = 0; i < imageCount; i++)
     {
         VkFramebufferCreateInfo framebufferCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .renderPass = renderPass,
             .attachmentCount = 1,
-            .pAttachments = &swapchainImageViews[i],
-            .width = surfaceExtent.width,
-            .height = surfaceExtent.height,
+            .pAttachments = &imageViews[i],
+            .width = extent.width,
+            .height = extent.height,
             .layers = 1
         };
 
-        if (vkCreateFramebuffer(device, &framebufferCreateInfo, NULL, &swapchainFramebuffers[i]) != VK_SUCCESS) {
+        if (vkCreateFramebuffer(device, &framebufferCreateInfo, NULL, &framebuffers[i]) != VK_SUCCESS) {
             PANIC("%s\n", "Failed to create framebuffer");
         }
     }
+
+    return framebuffers;
+}
+
+typedef struct
+{
+    int width;
+    int height;
+    bool resized;
+} WindowFramebufferInfo;
+
+static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+{
+    WindowFramebufferInfo* framebufferInfo = glfwGetWindowUserPointer(window);
+    framebufferInfo->width = width;
+    framebufferInfo->height = height;
+    framebufferInfo->resized = true;
+}
+
+static void onExit(void)
+{
+    glfwTerminate();
+}
+
+int main(void)
+{
+    if (atexit(onExit) != 0)
+        PANIC("%s\n", "Failed to register atexit function");
+
+    if (!glfwInit())
+        PANIC("%s\n", "Failed to initialize GLFW");
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, NULL, NULL);
+    if (window == NULL)
+        PANIC("%s\n", "Failed to create GLFW window");
+
+    WindowFramebufferInfo windowFramebufferInfo = {
+        .width = WINDOW_WIDTH,
+        .height = WINDOW_HEIGHT,
+        .resized = false
+    };
+
+    glfwSetWindowUserPointer(window, &windowFramebufferInfo);
+    glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+
+    VkInstance instance = createVulkanInstance();
+
+    VkSurfaceKHR surface;
+    if (glfwCreateWindowSurface(instance, window, NULL, &surface) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create window surface");
+
+    u32 queueFamilyIndex;
+    VkPhysicalDevice physicalDevice = pickPhysicalDeviceAndQueueFamily(instance, surface, &queueFamilyIndex);
+
+    float queuePriority = 1.0f;
+    VkDeviceQueueCreateInfo queueCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueFamilyIndex = queueFamilyIndex,
+        .queueCount = 1,
+        .pQueuePriorities = &queuePriority
+    };
+
+    VkDeviceCreateInfo deviceCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &queueCreateInfo,
+        .enabledLayerCount = validationLayerCount,
+        .ppEnabledLayerNames = validationLayerNames,
+        .enabledExtensionCount = deviceExtensionCount,
+        .ppEnabledExtensionNames = deviceExtensionNames
+    };
+
+    VkDevice device;
+    vkCreateDevice(physicalDevice, &deviceCreateInfo, NULL, &device);
+
+    VkQueue queue;
+    vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue);
+
+    VkSurfaceCapabilitiesKHR surfaceCapabilities;
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCapabilities) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to determine physical device surface capabilities");
+
+    VkSurfaceFormatKHR surfaceFormat = pickSurfaceFormat(physicalDevice, surface);
+    VkPresentModeKHR surfacePresentMode = pickSurfacePresentMode(physicalDevice, surface);
+
+    VkRenderPass renderPass = createRenderPass(device, surfaceFormat.format);
+
+    VkPipelineLayout pipelineLayout;
+    VkPipeline graphicsPipeline = createGraphicsPipeline(device, renderPass, &pipelineLayout);
 
     VkCommandPoolCreateInfo commandPoolCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -548,34 +666,64 @@ int main(void)
             PANIC("%s\n", "Failed to create fence");
     }
 
-    VkViewport viewport = {
-        .x = 0.f,
-        .y = 0.f,
-        .width = (f32)surfaceExtent.width,
-        .height = (f32)surfaceExtent.height,
-        .minDepth = 0.f,
-        .maxDepth = 1.f
-    };
-
-    VkRect2D scissor = {
-        .offset = {0, 0},
-        .extent = surfaceExtent
-    };
+    VkExtent2D surfaceExtent;
+    VkViewport viewport;
+    VkRect2D scissor;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    u32 swapchainImageCount;
+    VkImage* swapchainImages = NULL;
+    VkImageView* swapchainImageViews = NULL;
+    VkFramebuffer* swapchainFramebuffers = NULL;
 
     u32 currentFrame = 0;
     while(!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
 
+        if (windowFramebufferInfo.width == 0 && windowFramebufferInfo.height == 0)
+            continue;
+
+        if (swapchain == VK_NULL_HANDLE)
+        {
+            surfaceExtent = querySurfaceExtent(window, surfaceCapabilities);
+
+            viewport = (VkViewport){
+                .x = 0.f,
+                .y = 0.f,
+                .width = (f32)surfaceExtent.width,
+                .height = (f32)surfaceExtent.height,
+                .minDepth = 0.f,
+                .maxDepth = 1.f
+            };
+
+            scissor = (VkRect2D){
+                .offset = {0, 0},
+                .extent = surfaceExtent
+            };
+
+            swapchain = createSwapchain(device, surface, surfaceCapabilities, surfaceFormat, surfacePresentMode, surfaceExtent);
+            swapchainImages = getSwapchainImages(device, swapchain, &swapchainImageCount);
+            swapchainImageViews = createSwapchainImageViews(device, swapchainImages, swapchainImageCount, surfaceFormat.format);
+            swapchainFramebuffers = createSwapchainFramebuffers(device, swapchainImageViews, swapchainImageCount, surfaceExtent, renderPass);
+        }
+
         if (vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX) != VK_SUCCESS)
             PANIC("%s\n", "Failed to wait for fences");
 
+        u32 imageIndex;
+        VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            destroySwapchain(device, &swapchain, swapchainImageCount, swapchainImages, swapchainImageViews, swapchainFramebuffers);
+            continue;
+        }
+        else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+        {
+            PANIC("%s\n", "Failed to acquire next image from swapchain");
+        }
+
         if (vkResetFences(device, 1, &inFlightFences[currentFrame]) != VK_SUCCESS)
             PANIC("%s\n", "Failed to reset fences");
-
-        u32 imageIndex;
-        if (vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex) != VK_SUCCESS)
-            PANIC("%s\n", "Failed to acquire next image from swapchain");
 
         if (vkResetCommandBuffer(commandBuffers[currentFrame], 0) != VK_SUCCESS)
             PANIC("%s\n", "Failed to reset command buffer");
@@ -633,8 +781,17 @@ int main(void)
             .pImageIndices = &imageIndex
         };
 
-        if (vkQueuePresentKHR(queue, &presentInfo) != VK_SUCCESS)
+        result = vkQueuePresentKHR(queue, &presentInfo);
+
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || windowFramebufferInfo.resized)
+        {
+            windowFramebufferInfo.resized = false;
+            destroySwapchain(device, &swapchain, swapchainImageCount, swapchainImages, swapchainImageViews, swapchainFramebuffers);
+        }
+        else if (result != VK_SUCCESS)
+        {
             PANIC("%s\n", "Failed to queue presentation");
+        }
         
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
@@ -653,17 +810,9 @@ int main(void)
     vkDestroyPipelineLayout(device, pipelineLayout, NULL);
     vkDestroyRenderPass(device, renderPass, NULL);
 
-    for (u32 i = 0; i < swapchainImageCount; i++)
-    {
-        vkDestroyFramebuffer(device, swapchainFramebuffers[i], NULL);
-        vkDestroyImageView(device, swapchainImageViews[i], NULL);
-    }
-
-    freeAndNull(swapchainFramebuffers);
-    freeAndNull(swapchainImageViews);
-    freeAndNull(swapchainImages);
-
-    vkDestroySwapchainKHR(device, swapchain, NULL);
+    if (swapchain != VK_NULL_HANDLE)
+        destroySwapchain(device, &swapchain, swapchainImageCount, swapchainImages, swapchainImageViews, swapchainFramebuffers);
+    
     vkDestroyDevice(device, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
     vkDestroyInstance(instance, NULL);
