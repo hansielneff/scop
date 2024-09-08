@@ -1,4 +1,5 @@
 #include "util.h"
+#include "HandmadeMath.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,22 @@
 #define WINDOW_HEIGHT 720
 
 #define MAX_FRAMES_IN_FLIGHT 2
+
+typedef struct {
+    HMM_Vec2 pos;
+    HMM_Vec3 color;
+} Vertex;
+
+static Vertex vertices[] = {
+    {.pos = {-0.5f, -0.5f}, .color = { 1.0f,  0.0f,  0.0f}},
+    {.pos = { 0.5f, -0.5f}, .color = { 0.0f,  1.0f,  0.0f}},
+    {.pos = { 0.5f,  0.5f}, .color = { 0.0f,  0.0f,  1.0f}},
+    {.pos = {-0.5f,  0.5f}, .color = { 1.0f,  1.0f,  1.0f}}
+};
+
+static u16 indices[] = {
+    0, 1, 2, 2, 3, 0
+};
 
 static const char* validationLayerNames[] = {
 #if DEBUG
@@ -163,6 +180,18 @@ VkPhysicalDevice pickPhysicalDeviceAndQueueFamily(VkInstance instance, VkSurface
         *outQueueFamilyIndex = queueFamilyIndex;
 
     return physicalDevice;
+}
+
+u32 pickMemoryType(VkPhysicalDevice physicalDevice, u32 typeFilter, VkMemoryPropertyFlags properties)
+{
+    VkPhysicalDeviceMemoryProperties memoryProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+
+    for (u32 i = 0; i < memoryProperties.memoryTypeCount; i++)
+        if ((typeFilter & (1 << i)) && (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties)
+            return i;
+
+    PANIC("%s\n", "Failed to find suitable memory type");
 }
 
 VkSurfaceFormatKHR pickSurfaceFormat(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface)
@@ -346,8 +375,33 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkRenderPass renderPass, VkPi
         .pDynamicStates = dynamicStates
     };
 
+    VkVertexInputBindingDescription vertexInputBindingDescription = {
+        .binding = 0,
+        .stride = sizeof(Vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+    };
+
+    VkVertexInputAttributeDescription vertexInputAttributeDescriptions[] = {
+        {
+            .binding = 0,
+            .location = 0,
+            .format = VK_FORMAT_R32G32_SFLOAT,
+            .offset = offsetof(Vertex, pos)
+        },
+        {
+            .binding = 0,
+            .location = 1,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+            .offset = offsetof(Vertex, color)
+        }
+    };
+
     VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &vertexInputBindingDescription,
+        .vertexAttributeDescriptionCount = ARR_LEN(vertexInputAttributeDescriptions),
+        .pVertexAttributeDescriptions = vertexInputAttributeDescriptions
     };
 
     VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo = {
@@ -457,7 +511,8 @@ static VkSwapchainKHR createSwapchain(VkDevice device, VkSurfaceKHR surface, VkS
 
 static void destroySwapchain(VkDevice device, VkSwapchainKHR* swapchain, u32 imageCount, VkImage* images, VkImageView* imageViews, VkFramebuffer* framebuffers)
 {
-    vkDeviceWaitIdle(device);
+    if (vkDeviceWaitIdle(device) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to wait for device to be idle");
 
     for (u32 i = 0; i < imageCount; i++)
     {
@@ -534,6 +589,132 @@ static VkFramebuffer* createSwapchainFramebuffers(VkDevice device, VkImageView* 
     }
 
     return framebuffers;
+}
+
+VkBuffer createBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkDeviceMemory* outMemory, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties)
+{
+    ASSERT(outMemory != NULL);
+
+    VkBufferCreateInfo createInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE
+    };
+
+    VkBuffer buffer;
+    if (vkCreateBuffer(device, &createInfo, NULL, &buffer) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create buffer");
+
+    VkMemoryRequirements memoryRequirements;
+    vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
+    u32 memoryTypeIndex = pickMemoryType(physicalDevice, memoryRequirements.memoryTypeBits, properties);
+
+    VkMemoryAllocateInfo memoryAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memoryRequirements.size,
+        .memoryTypeIndex = memoryTypeIndex
+    };
+
+    if (vkAllocateMemory(device, &memoryAllocateInfo, NULL, outMemory) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to allocate buffer memory");
+
+    vkBindBufferMemory(device, buffer, *outMemory, 0);
+
+    return buffer;
+}
+
+void copyBuffer(VkDevice device, VkQueue queue, VkCommandPool commandPool, VkBuffer src, VkBuffer dst, VkDeviceSize size)
+{
+    VkCommandBufferAllocateInfo allocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = commandPool,
+        .commandBufferCount = 1
+    };
+
+    VkCommandBuffer commandBuffer;
+    if (vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to allocate command buffer for buffer transfer");
+
+    VkCommandBufferBeginInfo beginInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+    };
+
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to begin command buffer for buffer transfer");
+    
+    VkBufferCopy copyRegion = {
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = size
+    };
+
+    vkCmdCopyBuffer(commandBuffer, src, dst, 1, &copyRegion);
+
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to end command buffer for buffer transfer");
+    
+    VkSubmitInfo submitInfo = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &commandBuffer
+    };
+
+    if (vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to submit command buffer for buffer transfer to queue");
+
+    if (vkQueueWaitIdle(queue) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to wait for queue to be idle");
+
+    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+VkBuffer createVertexBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkQueue queue, VkCommandPool commandPool, VkDeviceMemory* outMemory)
+{
+    VkDeviceSize bufferSize = sizeof(vertices[0]) * ARR_LEN(vertices);
+
+    VkDeviceMemory stagingBufferMemory;
+    VkBuffer stagingBuffer = createBuffer(physicalDevice, device, &stagingBufferMemory, bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    void* bufferData;
+    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &bufferData);
+    memcpy(bufferData, vertices, bufferSize);
+    vkUnmapMemory(device, stagingBufferMemory);
+
+    VkBuffer buffer = createBuffer(physicalDevice, device, outMemory, bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    copyBuffer(device, queue, commandPool, stagingBuffer, buffer, bufferSize);
+    vkDestroyBuffer(device, stagingBuffer, NULL);
+    vkFreeMemory(device, stagingBufferMemory, NULL);
+
+    return buffer;
+}
+
+VkBuffer createIndexBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkQueue queue, VkCommandPool commandPool, VkDeviceMemory* outMemory)
+{
+    VkDeviceSize bufferSize = sizeof(indices[0]) * ARR_LEN(indices);
+
+    VkDeviceMemory stagingBufferMemory;
+    VkBuffer stagingBuffer = createBuffer(physicalDevice, device, &stagingBufferMemory, bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    void* bufferData;
+    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &bufferData);
+    memcpy(bufferData, indices, bufferSize);
+    vkUnmapMemory(device, stagingBufferMemory);
+
+    VkBuffer buffer = createBuffer(physicalDevice, device, outMemory, bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    copyBuffer(device, queue, commandPool, stagingBuffer, buffer, bufferSize);
+    vkDestroyBuffer(device, stagingBuffer, NULL);
+    vkFreeMemory(device, stagingBufferMemory, NULL);
+
+    return buffer;
 }
 
 typedef struct
@@ -633,6 +814,12 @@ int main(void)
     VkCommandPool commandPool;
     if (vkCreateCommandPool(device, &commandPoolCreateInfo, NULL, &commandPool) != VK_SUCCESS)
         PANIC("%s\n", "Failed to create command pool");
+
+    VkDeviceMemory vertexBufferMemory;
+    VkBuffer vertexBuffer = createVertexBuffer(physicalDevice, device, queue, commandPool, &vertexBufferMemory);
+
+    VkDeviceMemory indexBufferMemory;
+    VkBuffer indexBuffer = createIndexBuffer(physicalDevice, device, queue, commandPool, &indexBufferMemory);
 
     VkCommandBufferAllocateInfo commandBufferAllocateInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -749,7 +936,13 @@ int main(void)
         vkCmdBindPipeline(commandBuffers[currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
         vkCmdSetViewport(commandBuffers[currentFrame], 0, 1, &viewport);
         vkCmdSetScissor(commandBuffers[currentFrame], 0, 1, &scissor);
-        vkCmdDraw(commandBuffers[currentFrame], 3, 1, 0, 0);
+
+        VkBuffer vertexBuffers[] = {vertexBuffer};
+        VkDeviceSize vertexBufferOffsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffers[currentFrame], 0, 1, vertexBuffers, vertexBufferOffsets);
+        vkCmdBindIndexBuffer(commandBuffers[currentFrame], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+        vkCmdDrawIndexed(commandBuffers[currentFrame], ARR_LEN(indices), 1, 0, 0, 0);
         vkCmdEndRenderPass(commandBuffers[currentFrame]);
 
         if (vkEndCommandBuffer(commandBuffers[currentFrame]) != VK_SUCCESS)
@@ -796,7 +989,8 @@ int main(void)
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
-    vkDeviceWaitIdle(device);
+    if (vkDeviceWaitIdle(device) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to wait for device to be idle");
 
     for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
@@ -813,6 +1007,12 @@ int main(void)
     if (swapchain != VK_NULL_HANDLE)
         destroySwapchain(device, &swapchain, swapchainImageCount, swapchainImages, swapchainImageViews, swapchainFramebuffers);
     
+    vkDestroyBuffer(device, indexBuffer, NULL);
+    vkFreeMemory(device, indexBufferMemory, NULL);
+
+    vkDestroyBuffer(device, vertexBuffer, NULL);
+    vkFreeMemory(device, vertexBufferMemory, NULL);
+
     vkDestroyDevice(device, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
     vkDestroyInstance(instance, NULL);
