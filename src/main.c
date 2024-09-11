@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include "GLFW/glfw3.h"
@@ -323,7 +324,7 @@ VkRenderPass createRenderPass(VkDevice device, VkFormat pixelFormat)
     return renderPass;
 }
 
-VkPipeline createGraphicsPipeline(VkDevice device, VkRenderPass renderPass, VkPipelineLayout* outPipelineLayout)
+VkPipeline createGraphicsPipeline(VkDevice device, VkRenderPass renderPass, VkDescriptorSetLayout descriptorSetLayout, VkPipelineLayout* outPipelineLayout)
 {
     VkShaderModuleCreateInfo shaderModuleCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO
@@ -420,7 +421,7 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkRenderPass renderPass, VkPi
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .polygonMode = VK_POLYGON_MODE_FILL,
         .cullMode = VK_CULL_MODE_BACK_BIT,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .lineWidth = 1.f
     };
@@ -444,7 +445,9 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkRenderPass renderPass, VkPi
     };
 
     VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &descriptorSetLayout
     };
 
     VkPipelineLayout pipelineLayout;
@@ -680,7 +683,8 @@ VkBuffer createVertexBuffer(VkPhysicalDevice physicalDevice, VkDevice device, Vk
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     void* bufferData;
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &bufferData);
+    if (vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &bufferData) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to map vertex buffer memory");
     memcpy(bufferData, vertices, bufferSize);
     vkUnmapMemory(device, stagingBufferMemory);
 
@@ -703,7 +707,8 @@ VkBuffer createIndexBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkQ
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     void* bufferData;
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &bufferData);
+    if (vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &bufferData) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to map index buffer memory");
     memcpy(bufferData, indices, bufferSize);
     vkUnmapMemory(device, stagingBufferMemory);
 
@@ -715,6 +720,46 @@ VkBuffer createIndexBuffer(VkPhysicalDevice physicalDevice, VkDevice device, VkQ
     vkFreeMemory(device, stagingBufferMemory, NULL);
 
     return buffer;
+}
+
+typedef struct
+{
+    HMM_Mat4 model;
+    HMM_Mat4 view;
+    HMM_Mat4 proj;
+} UniformBufferObject;
+
+void createUniformBuffers(VkPhysicalDevice physicalDevice, VkDevice device, VkBuffer uniformBuffers[], VkDeviceMemory uniformBuffersMemory[], void* uniformBuffersMapped[])
+{
+    ASSERT(uniformBuffers != NULL);
+    ASSERT(uniformBuffersMemory != NULL);
+    ASSERT(uniformBuffersMapped != NULL);
+
+    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        uniformBuffers[i] = createBuffer(physicalDevice, device, &uniformBuffersMemory[i], bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]) != VK_SUCCESS)
+            PANIC("%s\n", "Failed to map uniform buffer memory");
+    }
+}
+
+void updateUniformBuffer(void* uniformBuffersMapped[], VkExtent2D surfaceExtent, u32 currentImage)
+{
+    float time = (float)clock() / CLOCKS_PER_SEC;
+    if (time == -1)
+        PANIC("%s\n", "Failed to read system clock");
+    
+    UniformBufferObject ubo = {
+        .model = HMM_Rotate_RH(HMM_TurnToRad * time, (HMM_Vec3){0.0f, 0.0f, 1.0f}),
+        .view = HMM_LookAt_RH((HMM_Vec3){0.0f, -1.0f, 2.0f}, (HMM_Vec3){0.0f, 0.0f, 0.0f}, (HMM_Vec3){0.0f, 1.0f, 0.0f}),
+        .proj = HMM_Perspective_RH_ZO(45.0f, surfaceExtent.width / (f32)surfaceExtent.height, 0.1f, 10.0f)
+    };
+
+    ubo.proj.Elements[1][1] *= -1;
+
+    memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
 typedef struct
@@ -802,8 +847,25 @@ int main(void)
 
     VkRenderPass renderPass = createRenderPass(device, surfaceFormat.format);
 
+    VkDescriptorSetLayoutBinding descriptorSetLayoutBinding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT
+    };
+
+    VkDescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &descriptorSetLayoutBinding
+    };
+
+    VkDescriptorSetLayout descriptorSetLayout;
+    if (vkCreateDescriptorSetLayout(device, &descriptorSetLayoutCreateInfo, NULL, &descriptorSetLayout) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create descriptor set layout");
+
     VkPipelineLayout pipelineLayout;
-    VkPipeline graphicsPipeline = createGraphicsPipeline(device, renderPass, &pipelineLayout);
+    VkPipeline graphicsPipeline = createGraphicsPipeline(device, renderPass, descriptorSetLayout, &pipelineLayout);
 
     VkCommandPoolCreateInfo commandPoolCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -815,12 +877,6 @@ int main(void)
     if (vkCreateCommandPool(device, &commandPoolCreateInfo, NULL, &commandPool) != VK_SUCCESS)
         PANIC("%s\n", "Failed to create command pool");
 
-    VkDeviceMemory vertexBufferMemory;
-    VkBuffer vertexBuffer = createVertexBuffer(physicalDevice, device, queue, commandPool, &vertexBufferMemory);
-
-    VkDeviceMemory indexBufferMemory;
-    VkBuffer indexBuffer = createIndexBuffer(physicalDevice, device, queue, commandPool, &indexBufferMemory);
-
     VkCommandBufferAllocateInfo commandBufferAllocateInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool = commandPool,
@@ -831,6 +887,69 @@ int main(void)
     VkCommandBuffer commandBuffers[MAX_FRAMES_IN_FLIGHT];
     if (vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, commandBuffers) != VK_SUCCESS)
         PANIC("%s\n", "Failed to allocate command buffers");
+
+    VkDeviceMemory vertexBufferMemory;
+    VkBuffer vertexBuffer = createVertexBuffer(physicalDevice, device, queue, commandPool, &vertexBufferMemory);
+
+    VkDeviceMemory indexBufferMemory;
+    VkBuffer indexBuffer = createIndexBuffer(physicalDevice, device, queue, commandPool, &indexBufferMemory);
+
+    VkBuffer uniformBuffers[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory uniformBuffersMemory[MAX_FRAMES_IN_FLIGHT];
+    void* uniformBuffersMapped[MAX_FRAMES_IN_FLIGHT];
+    createUniformBuffers(physicalDevice, device, uniformBuffers, uniformBuffersMemory, uniformBuffersMapped);
+
+    VkDescriptorPoolSize descriptorPoolSize = {
+        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = MAX_FRAMES_IN_FLIGHT
+    };
+
+    VkDescriptorPoolCreateInfo descriptorPoolCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = MAX_FRAMES_IN_FLIGHT,
+        .poolSizeCount = 1,
+        .pPoolSizes = &descriptorPoolSize
+    };
+
+    VkDescriptorPool descriptorPool;
+    if (vkCreateDescriptorPool(device, &descriptorPoolCreateInfo, NULL, &descriptorPool) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to create descriptor pool");
+
+    VkDescriptorSetLayout descriptorSetLayouts[MAX_FRAMES_IN_FLIGHT];
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        descriptorSetLayouts[i] = descriptorSetLayout;
+
+    VkDescriptorSetAllocateInfo descriptorSetAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = descriptorPool,
+        .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+        .pSetLayouts = descriptorSetLayouts
+    };
+
+    VkDescriptorSet descriptorSets[MAX_FRAMES_IN_FLIGHT];
+    if (vkAllocateDescriptorSets(device, &descriptorSetAllocateInfo, descriptorSets) != VK_SUCCESS)
+        PANIC("%s\n", "Failed to allocate descriptor sets");
+
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        VkDescriptorBufferInfo descriptorBufferInfo = {
+            .buffer = uniformBuffers[i],
+            .offset = 0,
+            .range = sizeof(UniformBufferObject)
+        };
+
+        VkWriteDescriptorSet writeDescriptorSet = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptorSets[i],
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .pBufferInfo = &descriptorBufferInfo
+        };
+
+        vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, NULL);
+    }
 
     VkSemaphoreCreateInfo semaphoreCreateInfo = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
@@ -942,12 +1061,15 @@ int main(void)
         vkCmdBindVertexBuffers(commandBuffers[currentFrame], 0, 1, vertexBuffers, vertexBufferOffsets);
         vkCmdBindIndexBuffer(commandBuffers[currentFrame], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
+        vkCmdBindDescriptorSets(commandBuffers[currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, NULL);
         vkCmdDrawIndexed(commandBuffers[currentFrame], ARR_LEN(indices), 1, 0, 0, 0);
         vkCmdEndRenderPass(commandBuffers[currentFrame]);
 
         if (vkEndCommandBuffer(commandBuffers[currentFrame]) != VK_SUCCESS)
             PANIC("%s\n", "Failed to end command buffer");
         
+        updateUniformBuffer(uniformBuffersMapped, surfaceExtent, currentFrame);
+
         VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
         VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
         VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -1002,16 +1124,23 @@ int main(void)
     vkDestroyCommandPool(device, commandPool, NULL);
     vkDestroyPipeline(device, graphicsPipeline, NULL);
     vkDestroyPipelineLayout(device, pipelineLayout, NULL);
+    vkDestroyDescriptorPool(device, descriptorPool, NULL);
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, NULL);
     vkDestroyRenderPass(device, renderPass, NULL);
 
     if (swapchain != VK_NULL_HANDLE)
         destroySwapchain(device, &swapchain, swapchainImageCount, swapchainImages, swapchainImageViews, swapchainFramebuffers);
-    
+
     vkDestroyBuffer(device, indexBuffer, NULL);
     vkFreeMemory(device, indexBufferMemory, NULL);
 
     vkDestroyBuffer(device, vertexBuffer, NULL);
     vkFreeMemory(device, vertexBufferMemory, NULL);
+
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyBuffer(device, uniformBuffers[i], NULL);
+        vkFreeMemory(device, uniformBuffersMemory[i], NULL);
+    }
 
     vkDestroyDevice(device, NULL);
     vkDestroySurfaceKHR(instance, surface, NULL);
