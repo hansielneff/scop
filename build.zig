@@ -15,11 +15,6 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const mach_glfw_module = b.dependency("mach_glfw", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("mach-glfw");
-
     const exe = b.addExecutable(.{
         .name = "scop",
         .root_source_file = b.path("src/main.zig"),
@@ -32,7 +27,12 @@ pub fn build(b: *std.Build) void {
     // step when running `zig build`).
     b.installArtifact(exe);
 
-    exe.root_module.addImport("mach-glfw", mach_glfw_module);
+    const dep_mach_glfw = b.dependency("mach_glfw", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("mach-glfw", dep_mach_glfw.module("mach-glfw"));
 
     // Get the (lazy) path to vk.xml:
     const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");

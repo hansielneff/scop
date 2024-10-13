@@ -37,7 +37,6 @@ pub fn main() !void {
     };
     defer window.destroy();
 
-    // This line fails compilation
     _ = try BaseDispatch.load(@as(vk.PfnGetInstanceProcAddr, @ptrCast(&glfw.getInstanceProcAddress)));
 
     while (!window.shouldClose()) {
