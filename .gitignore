@@ -1,0 +1,8 @@
+.zig-cache/
+zig-out/
+
+# required compiler version for mach-glfw
+zig-macos-aarch64-0.13.0-dev.351+64ef45eb0/
+zig
+
+.vscode
