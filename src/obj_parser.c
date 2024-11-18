@@ -26,7 +26,7 @@ void parseObjFile(const char *filename, Vertex** outVertices, u32* outVertexCoun
         line[1023] = '\0';
         if (strncmp(line, "v ", 2) == 0) { // Vertex line
             Vertex v;
-            if (sscanf_s(line + 2, "%f %f %f", &v.pos.x, &v.pos.y, &v.pos.z) == 3) {
+            if (sscanf(line + 2, "%f %f %f", &v.pos.x, &v.pos.y, &v.pos.z) == 3) {
                 if (vertexCount < vertexArraySize) {
                     vertices[vertexCount++] = v;
                 } else {
@@ -35,7 +35,7 @@ void parseObjFile(const char *filename, Vertex** outVertices, u32* outVertexCoun
             }
         } else if (strncmp(line, "f ", 2) == 0) { // Face line
             int idx[32];
-            u32 indexInFaceCount = sscanf_s(line + 2,
+            u32 indexInFaceCount = sscanf(line + 2,
                 "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
                 idx, idx+1, idx+2, idx+3, idx+4, idx+5, idx+6, idx+7, idx+8, idx+9, idx+10, idx+11, idx+12, idx+13, idx+14, idx+15,
                 idx+16, idx+17, idx+18, idx+19, idx+20, idx+21, idx+22, idx+23, idx+24, idx+25, idx+26, idx+27, idx+28, idx+29, idx+30, idx+31);
