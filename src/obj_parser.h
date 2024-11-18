@@ -12,6 +12,6 @@ typedef struct
 
 typedef u32 Index;
 
-void parseObjFile(const char *filename, Vertex** outVertices, size_t* outVertexCount, Index** outIndices, size_t* outIndexCount);
+void parseObjFile(const char *filename, Vertex** outVertices, u32* outVertexCount, Index** outIndices, u32* outIndexCount);
 
 #endif
