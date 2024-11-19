@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200112L
+
 #include "util.h"
 #include "maths.h"
 #include "obj_parser.h"
