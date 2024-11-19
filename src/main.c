@@ -19,10 +19,10 @@
 #define MAX_FRAMES_IN_FLIGHT 2
 
 static Vertex* g_vertices = NULL;
-static size_t g_vertexCount = 0;
+static u32 g_vertexCount = 0;
 
 static u32* g_indices = NULL;
-static size_t g_indexCount = 0;
+static u32 g_indexCount = 0;
 
 static f32 g_modelX = 0.0f;
 static f32 g_modelY = 0.0f;
@@ -59,7 +59,7 @@ static void normalizeAndCenterModel()
     f32 vertexMaxX = -FLT_MAX;
     f32 vertexMaxY = -FLT_MAX;
     f32 vertexMaxZ = -FLT_MAX;
-    for (size_t i = 0; i < g_vertexCount; i++)
+    for (u32 i = 0; i < g_vertexCount; i++)
     {
         vertexMinX = (g_vertices[i].pos.x < vertexMinX) ? g_vertices[i].pos.x : vertexMinX;
         vertexMinY = (g_vertices[i].pos.y < vertexMinY) ? g_vertices[i].pos.y : vertexMinY;
@@ -75,10 +75,10 @@ static void normalizeAndCenterModel()
     f32 normalizationScalar = (bBoxExtentX > bBoxExtentY) ? bBoxExtentX : bBoxExtentY;
     normalizationScalar = (normalizationScalar > bBoxExtentZ) ? normalizationScalar : bBoxExtentZ;
 
-    f32 bBoxCenterX = vertexMinX + bBoxExtentX * 0.5;
-    f32 bBoxCenterY = vertexMinY + bBoxExtentY * 0.5;
-    f32 bBoxCenterZ = vertexMinZ + bBoxExtentZ * 0.5;
-    for (size_t i = 0; i < g_vertexCount; i++)
+    f32 bBoxCenterX = vertexMinX + bBoxExtentX * 0.5f;
+    f32 bBoxCenterY = vertexMinY + bBoxExtentY * 0.5f;
+    f32 bBoxCenterZ = vertexMinZ + bBoxExtentZ * 0.5f;
+    for (u32 i = 0; i < g_vertexCount; i++)
     {
         g_vertices[i].pos.x -= bBoxCenterX;
         g_vertices[i].pos.y -= bBoxCenterY;
@@ -308,16 +308,17 @@ VkExtent2D querySurfaceExtent(GLFWwindow* window, VkSurfaceCapabilitiesKHR surfa
     {
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
+        ASSERT(width >= 0 && height >= 0);
 
         u32 minWidth = surfaceCapabilities.minImageExtent.width;
         u32 maxWidth = surfaceCapabilities.maxImageExtent.width;
-        extent.width = (u32)(width > minWidth) ? width : minWidth;
-        extent.width = (u32)(width < maxWidth) ? width : maxWidth;
+        extent.width = ((u32)width > minWidth) ? width : minWidth;
+        extent.width = ((u32)width < maxWidth) ? width : maxWidth;
 
         u32 minHeight = surfaceCapabilities.minImageExtent.height;
         u32 maxHeight = surfaceCapabilities.maxImageExtent.height;
-        extent.height = (u32)(height > minHeight) ? height : minHeight;
-        extent.height = (u32)(height < maxHeight) ? height : maxHeight;
+        extent.height = ((u32)height > minHeight) ? (u32)height : minHeight;
+        extent.height = ((u32)height < maxHeight) ? (u32)height : maxHeight;
     }
 
     return extent;
