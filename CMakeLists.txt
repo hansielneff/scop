@@ -8,6 +8,10 @@ else()
     add_compile_options(-std=c99 -Werror)
 endif()
 
+if (APPLE)
+    add_compile_options(-DAPPLE)
+endif()
+
 find_package(Vulkan REQUIRED)
 
 include_directories(${Vulkan_INCLUDE_DIRS})

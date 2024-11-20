@@ -40,13 +40,17 @@ static const char* validationLayerNames[] = {
 static u32 validationLayerCount = ARR_LEN(validationLayerNames);
 
 static const char* instanceExtensionNames[] = {
+#ifdef APPLE
     VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+#endif
     VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
 };
 static u32 instanceExtensionCount = ARR_LEN(instanceExtensionNames);
 
 static const char* deviceExtensionNames[] = {
+#ifdef APPLE
     "VK_KHR_portability_subset",
+#endif
     VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
 static u32 deviceExtensionCount = ARR_LEN(deviceExtensionNames);
@@ -141,7 +145,9 @@ VkInstance createVulkanInstance()
 
     VkInstanceCreateInfo instanceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+#ifdef APPLE
         .flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
+#endif
         .enabledLayerCount = validationLayerCount,
         .ppEnabledLayerNames = validationLayerNames,
         .enabledExtensionCount = enabledExtensionCount,
